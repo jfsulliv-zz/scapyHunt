@@ -2,4 +2,8 @@ LEVEL 1 - Knock, knock
 
 A client on the network has an FTP port available to some friends. Find a way to access this port.
 
-It might help to be able to see what the client and its friends are talking about.
+-----
+HINTS
+-----
+- You may need to find a way to see all of the traffic on the network.
+- The target is not concerned with who you are as much as it is with what you say.
