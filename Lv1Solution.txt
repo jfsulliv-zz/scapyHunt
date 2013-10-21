@@ -1,0 +1,6 @@
+LEVEL 1 - Knock, knock
+
+1) Use nmap to determine the clients on the network.
+2) Perform a CAM Table overflow attack on the network to force the router into 'Hub' mode. Traffic will now be broadcasted to all clients.
+3) Use wireshark to determine the port-knocking sequence from one host to the other.
+4) Copy this sequence using scapy. It may help to capture some packets into scapy and base yours off of these.
