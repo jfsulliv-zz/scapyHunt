@@ -91,11 +91,8 @@ def knockAnswer(pkt):
   else:
     state.knockSequence = 0  
 
-  print state.knockSequence
-
   if state.knockSequence >= len(ports):
-    openPorts['10.5.0.6'].append(20)
-    openPorts['10.5.0.6'].append(21)
+    openPorts['10.5.0.6'].append(25)
 
 
 # Creates a daemon thread that will handle simulating traffic from .4 to .6
@@ -125,7 +122,7 @@ def processPacket(pkt):
     if pkt[IP].dst in clients:
       o4 = getLastOctet(pkt[IP].dst)
       globals()['dot'+o4](pkt)
-  elif pkt.haslayer(Ether) and state.macTable <= 2048:
+  elif pkt.haslayer(Ether) and state.macTable < 1024:
     state.macTable += 1 # Add an "entry" to the "MAC table"
     if state.macTable > 1023:
       trafficDaemon.start()
@@ -182,7 +179,7 @@ def dot4(pkt):
 def dot6(pkt):
   rpkt = None
   ports = [951,951,4826,443,100,21]
-  filteredPorts = [20,21]
+  filteredPorts = [25]
   if pkt.haslayer(ARP) and pkt[ARP].op == 1:
     rpkt = arpIsAt(pkt)
     os.write(tun,rpkt.build())
@@ -231,7 +228,7 @@ TUNSETOWNER = TUNSETIFF + 2
 # Open TUN device file, create tap0
 #
 #  To open a new transient device, put "tap%d" into ioctl() below.
-#   To open a persistent device, use "tap0" or the actual full name.
+#  To open a persistent device, use "tap0" or the actual full name.
 #
 #  You can create a persistent device with "openvpn --mktun --dev tap0".
 #   This device will show up on ifconfig, but will have "no link" unless  
@@ -267,7 +264,7 @@ clients['10.5.0.6'] = getMAC('10.5.0.6')
 clients['10.5.0.35'] = getMAC('10.5.0.35')
 # Initial ports in each client's open port list
 openPorts['10.5.0.4'] = [20,21,22,80,443]
-openPorts['10.5.0.6'] = [80]
+openPorts['10.5.0.6'] = [80,22]
 openPorts['10.5.0.35'] = [20,21,22,25,80,443,8080]
 
 #  Main loop, reads and processes packets
