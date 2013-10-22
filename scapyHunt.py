@@ -91,6 +91,7 @@ def knockAnswer(pkt):
   else:
     state.knockSequence = 0  
 
+
   if state.knockSequence >= len(ports):
     openPorts['10.5.0.6'].append(25)
 
@@ -138,8 +139,9 @@ def tcpSA(pkt):
   rpkt = pkt.copy()
   swapSrcAndDst(rpkt,Ether)
   swapSrcAndDst(rpkt,IP)
-  rpkt[TCP].flags = 'SA'
-  rpkt[TCP].seq   = 0x1000
+  rpkt[TCP].flags  = 'SA'
+  rpkt[TCP].seq    = 0x1000
+  rpkt[TCP].ack    = pkt[TCP].seq + 1
   rpkt[IP].chksum  = None # Recalculate the checksums
   rpkt[TCP].chksum = None
   rpkt[TCP].sport, rpkt[TCP].dport = rpkt[TCP].dport, rpkt[TCP].sport
@@ -150,8 +152,8 @@ def tcpRA(pkt):
   rpkt = pkt.copy()
   swapSrcAndDst(rpkt,Ether)
   swapSrcAndDst(rpkt,IP)
-  rpkt[TCP].flags = 'RA'
-  rpkt[TCP].seq   = 1
+  rpkt[TCP].flags  = 'RA'
+  rpkt[TCP].seq    = 1
   rpkt[IP].chksum  = None # Recalculate the checksums
   rpkt[TCP].chksum = None
   rpkt[TCP].sport, rpkt[TCP].dport = rpkt[TCP].dport, rpkt[TCP].sport
