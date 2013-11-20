@@ -1,21 +1,3 @@
-#! usr/bin/python
-
-#
-#  scapyHunt - A scapy-based series of puzzles designed to teach the essentials
-#              of network attacks and security.
-#
-#  Suggested tools:
-#   nMap
-#   wireshark
-#   dsniff (for macof)
-#
-#  Suggested setup:
-#   Run from a virtual or physical machine, connected to by the user via SSH (with/without GUI support)
-#
-#
-#  Tested with a 64-bit Debian 7.1.0 Virtual Machine
-#        
-
 from scapy.all import *
 from random import randint
 import systemGlobals as state
@@ -39,7 +21,6 @@ openPorts = state.clientOpenPorts
 # The number of entries in the CAM table (simulated) for exploiting purposes.
 macTable = state.macTable
 
-
 # Tools
 # -----
 # getLastOctet - split a given IP address and return the last octet (String)
@@ -58,54 +39,6 @@ def getMAC(IP):
 # About-face for given packet on a particular layer
 def swapSrcAndDst(pkt,layer):
   pkt[layer].src, pkt[layer].dst = pkt[layer].dst, pkt[layer].src
-
-
-
-# Port Knocking handling
-# -----
-# trafficDaemon - Daemon thread that handles automated traffic from .4 to .6 to reveal knock sequence
-#   Terminates on successful knock from user
-#
-# knockSequence - Main loop that will send a knock sequence from .4 to .6 on a time interval
-#   Target of trafficDaemon
-# knockAnswer - Increments the knock step as the correct pattern is sent by the user
-
-# Loops a specific port-knocking sequence from .4 to .6 with a pause in between runs
-def knockSequence():
-  ports = [951,951,4826,443,100,21]
-  ip = IP(dst ='10.5.0.6',src = '10.5.0.4') 
-  ether = Ether(dst = clients['10.5.0.6'], src = clients['10.5.0.4'])
-  while state.knockSequence < 6:
-    randomPort = randint(1,65535) # Random port number
-    for p in ports:
-      SYN = ether/ip/TCP(sport = randomPort+ports.index(p), dport = p, flags = 0x002, window = 2048, seq = 0)
-      os.write(tun, SYN.build())
-    dot6(SYN)
-    time.sleep(10)
-
-# Increments the knock step as the user sends the correct port knock pattern
-def knockAnswer(pkt):
-  ports = [951,951,4826,443,100,21]
-  if (pkt[IP].src == '10.5.0.4' or 
-        pkt[TCP].dport not in ports or 
-        state.knockSequence >= len(ports)):
-    return
-
-  if pkt[TCP].dport == ports[state.knockSequence]:
-    state.knockSequence += 1
-  else:
-    state.knockSequence = 0  
-
-
-  if state.knockSequence >= len(ports):
-    openPorts['10.5.0.6'].append(25)
-
-
-# Creates a daemon thread that will handle simulating traffic from .4 to .6
-# Termination conditions: Port-knock sequence has been completed by user
-trafficDaemon = threading.Thread(group=None, target=knockSequence, name=None, args=(), kwargs={}) 
-trafficDaemon.daemon = True
-
 
 
 # Packet Processing 
@@ -214,36 +147,28 @@ def smtpResp(pkt):
 
 def dot4(pkt):
   rpkt = None
-  # ARP handling
+  # ARP reply
   if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
-  
     rpkt = arpIsAt(pkt)
-    
-  # TCP handling
-  elif (pkt.haslayer(TCP)):
-  
+    os.write(tun,rpkt.build())
+  # TCP Syn request- determine what to do based on whether port is open/closed/filtered
+  elif (pkt.haslayer(TCP) and pkt[TCP].flags == 0x002):
     if pkt[TCP].dport in openPorts[pkt[IP].dst]:
-      if pkt[TCP].flags == 0x002): # SYN
-        rpkt = tcpSA(pkt)
+      rpkt = tcpSA(pkt)
     else:
       rpkt = tcpRA(pkt)
-  
-  if (rpkt == None):
-    return
-  os.write(tun,rpkt.build())
+    os.write(tun,rpkt.build())
 
 def dot6(pkt):
   rpkt = None
   ports = [951,951,4826,443,100,21]
-  filteredPorts = [25]
-  # ARP handling
+  filteredPorts = []#[25]
+  # ARP reply
   if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
-  
     rpkt = arpIsAt(pkt)
-    
+    os.write(tun,rpkt.build())
   # TCP handling
   elif (pkt.haslayer(TCP)):
-  
     if (pkt[TCP].dport in openPorts[pkt[IP].dst]):
       if (pkt[TCP].flags == 0x002): # SYN
         rpkt = tcpSA(pkt)
@@ -267,31 +192,25 @@ def dot6(pkt):
     else:
       rpkt = tcpRA(pkt)
       
-  if (rpkt == None):
-    return
-  os.write(tun,rpkt.build())
-  
+    if (rpkt == None):
+      return
+    os.write(tun,rpkt.build())
+    
+
+
 def dot35(pkt):
   rpkt = None
-  # ARP handling
+  # ARP reply
   if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
-  
     rpkt = arpIsAt(pkt)
-    
-  # TCP handling
-  elif (pkt.haslayer(TCP)):
-  
+    os.write(tun,rpkt.build())
+  # TCP Syn request- determine what to do based on whether port is open/closed/filtered
+  elif (pkt.haslayer(TCP) and pkt[TCP].flags == 0x002):
     if pkt[TCP].dport in openPorts[pkt[IP].dst]:
-      if pkt[TCP].flags == 0x002): # SYN
-        rpkt = tcpSA(pkt)
+      rpkt = tcpSA(pkt)
     else:
       rpkt = tcpRA(pkt)
-  
-  if (rpkt == None):
-    return
-  os.write(tun,rpkt.build())
-  
-
+    os.write(tun,rpkt.build())
 
 
 # TUN/TAP Interface Setup
@@ -348,8 +267,9 @@ clients['10.5.0.6'] = getMAC('10.5.0.6')
 clients['10.5.0.35'] = getMAC('10.5.0.35')
 # Initial ports in each client's open port list
 openPorts['10.5.0.4'] = [20,21,22,80,443]
-openPorts['10.5.0.6'] = [80,22] 
+openPorts['10.5.0.6'] = [80,22,25] 
 openPorts['10.5.0.35'] = [20,21,22,25,80,443,8080]
+
 
 #  Main loop, reads and processes packets
 while 1:
