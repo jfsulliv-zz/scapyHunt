@@ -1,6 +1,7 @@
 LEVEL 1 - Knock, knock
 
-There is an FTP server somewhere on the network which you need access to. Locate the server and find a way to connect to the service.
+There is an FTP server somewhere on the network which you need access to. 
+Locate the server and find a way to connect to the service.
 
 -----
 HINTS
