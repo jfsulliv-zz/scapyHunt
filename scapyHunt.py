@@ -12,8 +12,6 @@
 #  Suggested setup:
 #   Run from a virtual or physical machine, connected to by the user via SSH (with/without GUI support)
 #
-#
-#  Tested with a 64-bit Debian 7.1.0 Virtual Machine
 #        
 
 from scapy.all import *
@@ -63,11 +61,10 @@ def swapSrcAndDst(pkt,layer):
 
 # Port Knocking handling
 # -----
-# trafficDaemon - Daemon thread that handles automated traffic from .4 to .6 to reveal knock sequence
+# knockDaemon - Daemon thread that handles automated traffic from .4 to .6 to reveal knock sequence
 #   Terminates on successful knock from user
-#
 # knockSequence - Main loop that will send a knock sequence from .4 to .6 on a time interval
-#   Target of trafficDaemon
+#   Target of knockDaemon
 # knockAnswer - Increments the knock step as the correct pattern is sent by the user
 
 # Loops a specific port-knocking sequence from .4 to .6 with a pause in between runs
@@ -76,10 +73,12 @@ def knockSequence():
   ip = IP(dst ='10.5.0.6',src = '10.5.0.4') 
   ether = Ether(dst = clients['10.5.0.6'], src = clients['10.5.0.4'])
   while state.knockSequence < 6:
-    randomPort = randint(1,65535) # Random port number
+    randomPort = randint(1,65535 - 6) # Random port number
+    offset = 0
     for p in ports:
-      SYN = ether/ip/TCP(sport = randomPort+ports.index(p), dport = p, flags = 0x002, window = 2048, seq = 0)
+      SYN = ether/ip/TCP(sport = randomPort+offset, dport = p, flags = 0x002, window = 2048, seq = 0)
       os.write(tun, SYN.build())
+      offset += 1
     dot6(SYN)
     time.sleep(10)
 
@@ -90,7 +89,7 @@ def knockAnswer(pkt):
         pkt[TCP].dport not in ports or 
         state.knockSequence >= len(ports)):
     return
-
+  print(state.knockSequence)
   if pkt[TCP].dport == ports[state.knockSequence]:
     state.knockSequence += 1
   else:
@@ -99,14 +98,40 @@ def knockAnswer(pkt):
 
   if state.knockSequence >= len(ports):
     openPorts['10.5.0.6'].append(25)
+    gwTrafficDaemon.start()
+
+# Simulated Traffic
+def gwTraffic():
+  dsts = ["10.5.0.6","10.5.0.4"]
+  macs = [getMAC("10.1.8.22"), getMAC("10.1.8.2")]
+  while 1:
+    # Generate some mac/port combination
+    randomPort = randint(1,65535 - 1)
+    rndMAC = randint(0,1)
+    rndDst = randint(0,1)
+    mac = macs[rndMAC]
+    dest = dsts[rndDst]
+    # Send packet
+    ip = IP(src = '10.5.0.35', dst = dest)
+    ether = Ether(src = mac, dst = clients[dest])
+    SYN = ether/ip/TCP(sport = randomPort, dport = randomPort + 1, flags = 0x002, window = 2048, seq = 0)
+    os.write(tun, SYN.build())
+    # Sleep thread for 1-16 seconds
+    time.sleep(randomPort % 16 + 1)
 
 
 # Creates a daemon thread that will handle simulating traffic from .4 to .6
+# Start conditions: User has performed CAM table overflow, forcing routing to hub
 # Termination conditions: Port-knock sequence has been completed by user
-trafficDaemon = threading.Thread(group=None, target=knockSequence, name=None, args=(), kwargs={}) 
-trafficDaemon.daemon = True
+knockDaemon = threading.Thread(group=None, target=knockSequence, name=None, args=(), kwargs={}) 
+knockDaemon.daemon = True
 
-
+# Creates a daemon thread that will handle simulating traffic through the .35 gateway
+# (Same IP but varying MACs)
+# Start conditions: User has performed CAM table overflow, forcing routing to hub
+# Termination conditions: N/A
+gwTrafficDaemon = threading.Thread(group=None, target=gwTraffic, name=None, args=(), kwargs={})
+gwTrafficDaemon.daemon = True
 
 # Packet Processing 
 # -----
@@ -116,7 +141,9 @@ trafficDaemon.daemon = True
 # -----
 # arpIsAt - generates an ARP Is-At response to an ARP Who-Has request
 # tcpSA   - generates a TCP SYN-ACK response to a TCP SYN request (indicative of open/unfiltered port)
-# tcpRA   - generates a TCP RES-ACK response to a TCP Syn request (indicative of closed port)
+# tcpRA   - generates a TCP RES-ACK response to a TCP SYN request (indicative of closed port)
+# tcpA    - generates a TCP ACK response to a TCP SYN-ACK (Completed TCP handshake)
+# tcpFA   - generates a TCP FIN-ACK response to close a TCP connection
 
 # Recieve and process incoming packets 
 def processPacket(pkt):
@@ -131,7 +158,7 @@ def processPacket(pkt):
   elif (pkt.haslayer(Ether) and state.macTable < 1024):
     state.macTable += 1 # Add an "entry" to the "MAC table"
     if state.macTable > 1023:
-      trafficDaemon.start()
+      knockDaemon.start()
 
 # Generate a proper ARP who-has reply (is-at)
 def arpIsAt(pkt):
@@ -216,14 +243,12 @@ def dot4(pkt):
   rpkt = None
   # ARP handling
   if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
-  
     rpkt = arpIsAt(pkt)
     
   # TCP handling
   elif (pkt.haslayer(TCP)):
-  
     if pkt[TCP].dport in openPorts[pkt[IP].dst]:
-      if pkt[TCP].flags == 0x002): # SYN
+      if pkt[TCP].flags == 0x002: # SYN
         rpkt = tcpSA(pkt)
     else:
       rpkt = tcpRA(pkt)
@@ -238,20 +263,22 @@ def dot6(pkt):
   filteredPorts = [25]
   # ARP handling
   if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
-  
     rpkt = arpIsAt(pkt)
     
   # TCP handling
   elif (pkt.haslayer(TCP)):
-  
+    if (state.knockSequence < 6):
+      if (pkt[TCP].dport in ports and pkt[TCP].flags == 0x002):
+        rpkt = knockAnswer(pkt)
+    
     if (pkt[TCP].dport in openPorts[pkt[IP].dst]):
       if (pkt[TCP].flags == 0x002): # SYN
         rpkt = tcpSA(pkt)
-        
+      
       # Handling of SMTP Traffic
       if(pkt[TCP].dport == 25):
         if (pkt[TCP].flags == 0x011): # FIN-ACK
-          rpkt = tcpFA(pkt)
+          rpkt = tcpA(pkt)
           state.smtpIsAlive = False
         elif (pkt[TCP].flags == 0x010): # ACK
           if (state.smtpIsAlive == False): 
@@ -261,7 +288,7 @@ def dot6(pkt):
           if (pkt.haslayer(Raw) and ("EHLO" in pkt[Raw].load or "HELO" in pkt[Raw].load) 
               and pkt[TCP].dport == 25):
             rpkt = smtpResp(pkt)
-            
+    
     elif pkt[TCP].dport in filteredPorts:
       return
     else:
@@ -275,14 +302,12 @@ def dot35(pkt):
   rpkt = None
   # ARP handling
   if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
-  
     rpkt = arpIsAt(pkt)
     
   # TCP handling
   elif (pkt.haslayer(TCP)):
-  
     if pkt[TCP].dport in openPorts[pkt[IP].dst]:
-      if pkt[TCP].flags == 0x002): # SYN
+      if pkt[TCP].flags == 0x002: # SYN
         rpkt = tcpSA(pkt)
     else:
       rpkt = tcpRA(pkt)
@@ -290,7 +315,6 @@ def dot35(pkt):
   if (rpkt == None):
     return
   os.write(tun,rpkt.build())
-  
 
 
 
