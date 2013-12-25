@@ -32,6 +32,8 @@ import fcntl
 
 # Visible clients - Key is IP, Value is MAC Addr.
 clients = state.clientList
+# Clients in the internal network behind .35 - Key is IP, value is MAC Addr.
+internalClients = state.internalClientList
 # Dictionary associating each client to a list of their open ports.
 openPorts = state.clientOpenPorts
 # The number of entries in the CAM table (simulated) for exploiting purposes.
@@ -52,6 +54,9 @@ def getLastOctet(IP):
 # Returns a fake MAC Address based on a given IP
 def getMAC(IP):
   return "12:67:7e:b7:6d:" + ("%02x" % int(getLastOctet(IP)))
+# Returns a fake MAC Address based on a given IP in the internal network
+def getInternalMAC(IP):
+  return "12:67:4f:a2:6d:" + ("%02x" % int(getLastOctet(IP)))
 
 # About-face for given packet on a particular layer
 def swapSrcAndDst(pkt,layer):
@@ -79,7 +84,6 @@ def knockSequence():
       SYN = ether/ip/TCP(sport = randomPort+offset, dport = p, flags = 0x002, window = 2048, seq = 0)
       os.write(tun, SYN.build())
       offset += 1
-    dot6(SYN)
     time.sleep(10)
 
 # Increments the knock step as the user sends the correct port knock pattern
@@ -89,35 +93,50 @@ def knockAnswer(pkt):
         pkt[TCP].dport not in ports or 
         state.knockSequence >= len(ports)):
     return
-  print(state.knockSequence)
   if pkt[TCP].dport == ports[state.knockSequence]:
     state.knockSequence += 1
   else:
     state.knockSequence = 0  
 
-
   if state.knockSequence >= len(ports):
     openPorts['10.5.0.6'].append(25)
     gwTrafficDaemon.start()
 
-# Simulated Traffic
+# Simulated Traffic from clients behind 10.5.0.35 to local clients.
+#  Every fifth packet will be a SYN packet from 10.5.0.6:25 > 10.1.8.6:25,
+#  and all other packets are random and of little interest.
 def gwTraffic():
-  dsts = ["10.5.0.6","10.5.0.4"]
-  macs = [getMAC("10.1.8.22"), getMAC("10.1.8.2")]
+  srcs = ['10.5.0.6','10.5.0.4']
+  dsts = ['10.1.8.2','10.1.8.22']
+  pktInterval = 0
+  gwMAC = clients['10.5.0.35']
   while 1:
-    # Generate some mac/port combination
-    randomPort = randint(1,65535 - 1)
-    rndMAC = randint(0,1)
-    rndDst = randint(0,1)
-    mac = macs[rndMAC]
-    dest = dsts[rndDst]
+    if pktInterval != 4:
+      # Generate some mac/port combination
+      randomPort = randint(1,65535 - 1)
+      rndSrc = randint(0,1)
+      rndDst = randint(0,1) 
+      source = srcs[rndSrc]
+      dest = dsts[rndDst]
+      ip = IP(src = source, dst = dest)
+      ether = Ether(src = clients[source], dst = gwMAC)
+      tcp = TCP(sport = randomPort, dport = randomPort + 1, flags = 0x002, window = 2048, seq = 0)
+    else:
+      # Send a TCP packet from 10.5.0.6:21 to 10.1.8.6:21 (FTP)
+      source = '10.5.0.6'
+      dest = '10.1.8.6'
+      ip = IP(src = source, dst = dest)
+      ether = Ether(src = clients[source], dst = gwMAC)
+      tcp = TCP(sport = 21, dport = 21, flags = 0x002, window = 2048, seq = 0)
+    
     # Send packet
-    ip = IP(src = '10.5.0.35', dst = dest)
-    ether = Ether(src = mac, dst = clients[dest])
-    SYN = ether/ip/TCP(sport = randomPort, dport = randomPort + 1, flags = 0x002, window = 2048, seq = 0)
+    SYN = ether/ip/tcp
     os.write(tun, SYN.build())
-    # Sleep thread for 1-16 seconds
-    time.sleep(randomPort % 16 + 1)
+    # Response
+    processPacket(SYN)
+    # increment pktInterval mod 5 and sleep for 5 seconds
+    pktInterval = (pktInterval + 1) % 5
+    time.sleep(5)
 
 
 # Creates a daemon thread that will handle simulating traffic from .4 to .6
@@ -144,6 +163,8 @@ gwTrafficDaemon.daemon = True
 # tcpRA   - generates a TCP RES-ACK response to a TCP SYN request (indicative of closed port)
 # tcpA    - generates a TCP ACK response to a TCP SYN-ACK (Completed TCP handshake)
 # tcpFA   - generates a TCP FIN-ACK response to close a TCP connection
+# smtpInit- generates a TCP PSH-ACK response to a successful TCP handshake on port 25 (SMTP)
+# smtpResp- generates a TCP PSH-ACK response to an SMTP information query (EHLO or HELO)
 
 # Recieve and process incoming packets 
 def processPacket(pkt):
@@ -151,10 +172,16 @@ def processPacket(pkt):
     if pkt[ARP].pdst in clients:
       o4 = getLastOctet(pkt[ARP].pdst)
       globals()['dot'+o4](pkt) # Call the dot[last_octet] function
+    elif pkt[ARP].pdst in internalClients:
+      o4 = getLastOctet(pkt[ARP].pdst)
+      globals()['internalDot'+o4](pkt) # Call the internalDot[last_octet] function
   elif (pkt.haslayer(TCP)): # SYN
     if pkt[IP].dst in clients:
       o4 = getLastOctet(pkt[IP].dst)
       globals()['dot'+o4](pkt)
+    elif pkt[IP].dst in internalClients:
+      o4 = getLastOctet(pkt[IP].dst)
+      globals()['internalDot'+o4](pkt) # Call the internalDot[last_octet] function
   elif (pkt.haslayer(Ether) and state.macTable < 1024):
     state.macTable += 1 # Add an "entry" to the "MAC table"
     if state.macTable > 1023:
@@ -193,6 +220,7 @@ def tcpRA(pkt):
   rpkt[TCP].sport, rpkt[TCP].dport = rpkt[TCP].dport, rpkt[TCP].sport
   return rpkt
 
+# Generates a Finalize-Ack response to a Finalize request, to complete a TCP disconnect
 def tcpFA(pkt):
   rpkt = pkt.copy()
   swapSrcAndDst(rpkt,Ether)
@@ -205,6 +233,7 @@ def tcpFA(pkt):
   rpkt[TCP].sport, rpkt[TCP].dport = rpkt[TCP].dport, rpkt[TCP].sport
   return rpkt  
 
+# Generates an Ack response to a Syn-Ack request, completing a three-way handshake
 def tcpA(pkt):
   rpkt = pkt.copy()
   swapSrcAndDst(rpkt,Ether)
@@ -220,6 +249,7 @@ def tcpA(pkt):
   rpkt[TCP].sport, rpkt[TCP].dport = rpkt[TCP].dport, rpkt[TCP].sport
   return rpkt 
 
+# Generates a PSH-ACK response to a successful handshake, with an SMTP standard payload
 def smtpInit(pkt):
   ether = Ether(dst = pkt[Ether].src, src = pkt[Ether].dst)
   ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
@@ -227,6 +257,7 @@ def smtpInit(pkt):
   rpkt = ether/ip/tcp/'220 smtp02.mail.example.org ESMTP\r\n'
   return rpkt
 
+# Generates a PSH-ACK response to an SMTP information query (ie, EHLO or HELO)
 def smtpResp(pkt):
   ether = Ether(dst = pkt[Ether].src, src = pkt[Ether].dst)
   ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
@@ -237,7 +268,9 @@ def smtpResp(pkt):
 # Destination Specific Packet Processing
 # -----
 # Each dot[last_octet] function has a set of packet processing rules specific to each 'Client'
-# Separation of each client allows for unique behaviors
+#  dot4  - Standard client
+#  dot6  - Secondary SMTP server (port-knocking target)
+#  dot35 - Gateway to internal network with redirection based on destination MAC
 
 def dot4(pkt):
   rpkt = None
@@ -300,6 +333,25 @@ def dot6(pkt):
   
 def dot35(pkt):
   rpkt = None
+
+  # ARP handling
+  if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
+    rpkt = arpIsAt(pkt)
+
+  # TCP handling
+  elif (pkt.haslayer(TCP)):
+    if pkt[TCP].dport in openPorts[pkt[IP].dst]:
+      if pkt[TCP].flags == 0x002: # SYN
+        rpkt = tcpSA(pkt)
+    else:
+      rpkt = tcpRA(pkt)
+  
+  if (rpkt == None):
+    return
+  os.write(tun,rpkt.build())
+  
+def internalDot6(pkt):
+  rpkt = None
   # ARP handling
   if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
     rpkt = arpIsAt(pkt)
@@ -314,8 +366,8 @@ def dot35(pkt):
   
   if (rpkt == None):
     return
+  
   os.write(tun,rpkt.build())
-
 
 
 # TUN/TAP Interface Setup
@@ -358,8 +410,7 @@ print "Allocated interface %s. Configuring it." % ifname
 subprocess.check_call("ifconfig %s down" % ifname, shell=True)
 subprocess.check_call("ifconfig %s hw ether 12:67:7e:b7:6d:c8" % ifname, shell=True)
 subprocess.check_call("ifconfig %s 10.5.0.1 netmask 255.255.255.0 broadcast 10.5.0.255 up" % ifname, shell=True)
-
-
+subprocess.check_call("route add -net 10.1.8.0 netmask 255.255.255.0 gw 10.5.0.35 dev %s" % ifname, shell=True)
 
 # Defaults and Main Loop
 # -----
@@ -370,10 +421,17 @@ subprocess.check_call("ifconfig %s 10.5.0.1 netmask 255.255.255.0 broadcast 10.5
 clients['10.5.0.4'] = getMAC('10.5.0.4')
 clients['10.5.0.6'] = getMAC('10.5.0.6')
 clients['10.5.0.35'] = getMAC('10.5.0.35')
+# Initial entries in the internal network's client list
+internalClients['10.1.8.6'] = getInternalMAC('10.1.8.6')
+internalClients['10.1.8.22'] = getInternalMAC('10.1.8.22')
+internalClients['10.1.8.2'] = getInternalMAC('10.1.8.2')
 # Initial ports in each client's open port list
 openPorts['10.5.0.4'] = [20,21,22,80,443]
 openPorts['10.5.0.6'] = [80,22] 
 openPorts['10.5.0.35'] = [20,21,22,25,80,443,8080]
+openPorts['10.1.8.6'] = [21, 25]
+openPorts['10.1.8.2'] = [20, 80, 443]
+openPorts['10.1.8.22'] = [20, 22, 80, 443]
 
 #  Main loop, reads and processes packets
 while 1:
