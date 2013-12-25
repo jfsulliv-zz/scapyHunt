@@ -1,9 +1,30 @@
 LEVEL 1 - Knock, knock
 
-A client on the network has an FTP port available to some friends. Find a way to access this port.
+There is an FTP server somewhere on the network which you need access to. 
+Locate the server and find a way to connect to the service.
+
+-----
+TOOLS
+-----
+- scapy
+- nmap
+- wireshark
+- telnet/nc
+- dsniff
+
+-----
+CONCEPTS
+-----
+- Packet capture and manipulation in scapy
+- Packet analysis in wireshark
+- Router modes of operation
+- Network topography, gateways
+- Basic telnet/nc commands for a particular, common service
 
 -----
 HINTS
 -----
 - You may need to find a way to see all of the traffic on the network.
-- The target is not concerned with who you are as much as it is with what you say.
+- Other clients on the network might give you useful clues, if you can coerce them.
+- The target will most likely be isolated from the immediate local network, and will have some preferred clients.
+-- How can you tell a regular client from one who is acting as a gateway?
