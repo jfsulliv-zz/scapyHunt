@@ -1,8 +1,10 @@
-scapyHunt is an objective-based game in which you will use common network attack vectors and penetration testing methods to analyze and compromise a virtual network.
+scapyHunt is an objective-based game in which you will use common network attack vectors 
+and penetration testing methods to analyze and compromise a virtual network.
 
 The network itself is completely defined by custom-made packets which simulate a typical network setup.
 
-All communications with the network must happen over the 'tap0' interface- be sure to set the interface argument when using the tools listed below.
+All communications with the network must happen over the 'tap0' interface- 
+be sure to set the interface argument when using the tools listed below.
 
 Have fun :)
 
