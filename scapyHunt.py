@@ -121,7 +121,7 @@ def gwTraffic():
       ip = IP(src = source, dst = dest)
       ether = Ether(src = clients[source], dst = gwMAC)
       tcp = TCP(sport = randomPort, dport = randomPort + 1, flags = 0x002, window = 2048, seq = 0)
-    else:
+    elif state.ftpIsAlive == False:
       # Send a TCP packet from 10.5.0.6:21 to 10.1.8.6:21 (FTP)
       source = '10.5.0.6'
       dest = '10.1.8.6'
@@ -145,8 +145,8 @@ def gwTraffic():
 knockDaemon = threading.Thread(group=None, target=knockSequence, name=None, args=(), kwargs={}) 
 knockDaemon.daemon = True
 
-  # Creates a daemon thread that will handle simulating traffic through the .35 gateway
-  # (Same IP but varying MACs)
+# Creates a daemon thread that will handle simulating traffic through the .35 gateway
+# (Same IP but varying MACs)
 # Start conditions: User has performed CAM table overflow, forcing routing to hub
 # Termination conditions: N/A
 gwTrafficDaemon = threading.Thread(group=None, target=gwTraffic, name=None, args=(), kwargs={})
@@ -163,23 +163,25 @@ gwTrafficDaemon.daemon = True
 # tcpRA   - generates a TCP RES-ACK response to a TCP SYN request (indicative of closed port)
 # tcpA    - generates a TCP ACK response to a TCP SYN-ACK (Completed TCP handshake)
 # tcpFA   - generates a TCP FIN-ACK response to close a TCP connection
-# smtpInit- generates a TCP PSH-ACK response to a successful TCP handshake on port 25 (SMTP)
-# smtpResp- generates a TCP PSH-ACK response to an SMTP information query (EHLO or HELO)
+# 
+# smtpInit - Initializes an SMTP session and sends a standard introduction payload
+# smtpResp - Responses for 'EHLO'/'HELO' information queries
+# 
+# ftpInit - Initializes a FTP session and sends a standard introduction payload
+# ftpResp - Responses for standard FTP queries (USER, PASS, LIST, RETR)
 
 # Recieve and process incoming packets 
 def processPacket(pkt):
+  
   if pkt.haslayer(ARP):
     # Globally set ARP table if the router is in hub mode
     if pkt[ARP].pdst in clients:
-      if state.hubMode == True:
-        clients[pkt[ARP].pdst] = pkt[ARP].hwsrc
       o4 = getLastOctet(pkt[ARP].pdst)
       globals()['dot'+o4](pkt) # Call the dot[last_octet] function
     elif pkt[ARP].pdst in internalClients:
-      if state.hubMode == True:
-        clients[pkt[ARP].pdst] = pkt[ARP].hwsrc
       o4 = getLastOctet(pkt[ARP].pdst)
       globals()['internalDot'+o4](pkt) # Call the internalDot[last_octet] function
+  
   elif (pkt.haslayer(TCP)): # SYN
     if pkt[IP].dst in clients:
       o4 = getLastOctet(pkt[IP].dst)
@@ -187,6 +189,7 @@ def processPacket(pkt):
     elif pkt[IP].dst in internalClients:
       o4 = getLastOctet(pkt[IP].dst)
       globals()['internalDot'+o4](pkt) # Call the internalDot[last_octet] function
+  
   elif (pkt.haslayer(Ether) and state.macTable < 1024):
     state.macTable += 1 # Add an "entry" to the "MAC table"
     if state.macTable > 1023:
@@ -195,7 +198,10 @@ def processPacket(pkt):
 
 # Generate a proper ARP who-has reply (is-at)
 def arpIsAt(pkt):
-  fake_src_mac = clients[pkt[ARP].pdst]
+  if pkt[ARP].pdst in clients:
+    fake_src_mac = clients[pkt[ARP].pdst]
+  elif pkt[ARP].pdst in internalClients:
+    fake_src_mac = clients[pkt[ARP].pdst]
   ether = Ether(dst=pkt.hwsrc, src=fake_src_mac)
   arp = ARP(op="is-at", psrc=pkt.pdst, pdst="10.5.0.1", hwsrc=fake_src_mac, hwdst=pkt.hwsrc)
   rpkt = ether/arp
@@ -220,7 +226,8 @@ def tcpRA(pkt):
   swapSrcAndDst(rpkt,Ether)
   swapSrcAndDst(rpkt,IP)
   rpkt[TCP].flags = 'RA'
-  rpkt[TCP].seq = 1
+  rpkt[TCP].seq = 0
+  rpkt[TCP].ack = pkt[TCP].seq
   rpkt[IP].chksum = None # Recalculate the checksums
   rpkt[TCP].chksum = None
   rpkt[TCP].sport, rpkt[TCP].dport = rpkt[TCP].dport, rpkt[TCP].sport
@@ -260,15 +267,21 @@ def smtpInit(pkt):
   ether = Ether(dst = pkt[Ether].src, src = pkt[Ether].dst)
   ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
   tcp = TCP(flags='PA',seq=pkt[TCP].ack,ack=pkt[TCP].seq,sport = pkt[TCP].dport, dport = pkt[TCP].sport)
-  rpkt = ether/ip/tcp/'220 smtp02.mail.example.org ESMTP\r\n'
+  rpkt = ether/ip/tcp/'220-smtp02.mail.example.org ESMTP\r\n'
   return rpkt
 
 # Generates a PSH-ACK response to an SMTP information query (ie, EHLO or HELO)
 def smtpResp(pkt):
   ether = Ether(dst = pkt[Ether].src, src = pkt[Ether].dst)
   ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
-  tcp = TCP(flags='PA',seq=pkt[TCP].ack,ack=pkt[TCP].seq,sport = pkt[TCP].dport, dport = pkt[TCP].sport)
-  rpkt = ether/ip/tcp/'250 Welcome - smtp02 - Secondary SMTP Server\r\n250 Primary server at 10.1.8.6\r\n'
+  tcp = TCP(flags='PA',seq=pkt[TCP].ack,ack=pkt[TCP].seq + len(pkt[Raw].load),sport = pkt[TCP].dport, dport = pkt[TCP].sport)
+  
+  if "EHLO" in pkt[Raw].load or "HELO" in pkt[Raw].load:
+    load = '250-Welcome - smtp02 - Secondary SMTP Server\r\n250 Primary server at 10.1.8.6\r\n'
+  else:
+    load = '501-Invalid Command\r\n'
+
+  rpkt = ether/ip/tcp/load
   return rpkt
 
 # Generates a PSH-ACK response to a successful handshake, with an FTP standard payload
@@ -276,17 +289,41 @@ def ftpInit(pkt):
   ether = Ether(dst = pkt[Ether].src, src = pkt[Ether].dst)
   ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
   tcp = TCP(flags='PA',seq=pkt[TCP].ack,ack=pkt[TCP].seq,sport = pkt[TCP].dport, dport = pkt[TCP].sport)
-  rpkt = ether/ip/tcp/'220 QTCP ftp01.example.org\r\n'
+  rpkt = ether/ip/tcp/'220-QTCP ftp01.example.org\r\n'
   return rpkt
 
-# Generates the payload packet that the player must find and hash
-def targetPkt(pkt):
+# Generates a PSH-ACK response based on a given FTP command
+def ftpResp(pkt):
   ether = Ether(dst = pkt[Ether].src, src = pkt[Ether].dst)
   ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
-  tcp = TCP(flags='F',seq=pkt[TCP].ack,ack=pkt[TCP].seq,sport = pkt[TCP].dport, dport = pkt[TCP].sport)
-  rpkt = ether/ip/tcp/'220 QTCP ftp01.example.org - Trusted FTP server\nCongratulations- you have gained access to the target FTP network.\r\n'
-  return rpkt
+  tcp = TCP(flags='PA',seq=pkt[TCP].ack,ack=pkt[TCP].seq + len(pkt[Raw]),sport = pkt[TCP].dport, dport = pkt[TCP].sport)
 
+  # Detect command and reply appropriately
+  if "USER admin" in pkt[Raw].load and not state.ftpUserEntered:
+    state.ftpUserEntered = True
+    load = "331-Enter Password.\r\n"
+  elif "PASS admin" in pkt[Raw].load and state.ftpUserEntered and not state.ftpPassEntered:
+    state.ftpPassEntered = True
+    load = "230-Admin logged on.\r\n"
+  elif "LIST" in pkt[Raw].load:
+    if state.ftpPassEntered == False:
+      load = "530-User not logged in.\r\n"
+    else:
+      load = "250-topSecret.txt\r\n"
+  elif "RETR topSecret.txt" in pkt[Raw].load:
+    if state.ftpPassEntered == False:
+      load = "530-User not logged in.\r\n"
+    else:
+      #First send a confirmation packet
+      confLoad = "150-Retreiving file topSecret.txt\r\n"
+      os.write(tun, (ether/ip/tcp/confLoad).build())
+      load = "FTP Data (W WARNING THIS IS WARNING\r\nV AP-VERSION 1.0\r\nW Congratulations on completing scapyHunt. Hash this payload with SHA1 to confirm that you've won.\r\n"
+  else:
+    load = '501-Invalid Command\r\n'
+
+
+  rpkt = ether/ip/tcp/load
+  return rpkt
 
 # Destination Specific Packet Processing
 # -----
@@ -341,8 +378,7 @@ def dot6(pkt):
             state.smtpIsAlive = True
             rpkt = smtpInit(pkt)
         elif (pkt[TCP].flags == 0x018): # PSH-ACK
-          if (pkt.haslayer(Raw) and ("EHLO" in pkt[Raw].load or "HELO" in pkt[Raw].load) 
-              and pkt[TCP].dport == 25):
+          if (pkt.haslayer(Raw)):
             rpkt = smtpResp(pkt)
     
     elif pkt[TCP].dport in filteredPorts:
@@ -374,42 +410,44 @@ def dot35(pkt):
   os.write(tun,rpkt.build())
   
 def internalDot6(pkt):
-
-  # Immediately ignore any packets not from .4 or .6
-  if pkt.haslayer(IP) and pkt[IP].src not in ['10.5.0.6','10.5.0.4']:
-      return
-
+ 
   rpkt = None
   # ARP handling
-  if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
-    rpkt = arpIsAt(pkt)
-   
-  # TCP handling
+  if (pkt.haslayer(ARP)):
+    if pkt[ARP].op == 1:
+      rpkt = arpIsAt(pkt)
+    elif pkt[ARP].op == 2 and pkt[ARP].psrc in clients: 
+      clients[pkt[ARP].psrc] = pkt[ARP].hwsrc
+ 
+  # Immediately ignore any packets not from the supposed .4 and .6 clients
+  elif pkt.haslayer(Ether) and pkt[Ether].src not in [clients['10.5.0.6'],clients['10.5.0.4']]:
+    return
+ 
+ # TCP handling
   elif (pkt.haslayer(TCP)):
-    if (state.knockSequence < 6):
-      if (pkt[TCP].dport in ports and pkt[TCP].flags == 0x002):
-        rpkt = knockAnswer(pkt)
-    
     if (pkt[TCP].dport in openPorts[pkt[IP].dst]):
       if (pkt[TCP].flags == 0x002): # SYN
         rpkt = tcpSA(pkt)
       
       # Handling of FTP Traffic
-      if(pkt[TCP].dport == 25):
+      if(pkt[TCP].dport == 21):
         if (pkt[TCP].flags == 0x011): # FIN-ACK
           rpkt = tcpA(pkt)
           state.ftpIsAlive = False
+          state.ftpUserEntered = False
+          state.ftpPassEntered = False
         elif (pkt[TCP].flags == 0x010): # ACK
           if (state.ftpIsAlive == False): 
             state.ftpIsAlive = True
             rpkt = ftpInit(pkt)
-        #elif (pkt[TCP].flags == 0x018): # PSH-ACK
-        # Handling FTP session data
+        elif (pkt[TCP].flags == 0x018): # PSH-ACK
+          if pkt.haslayer(Raw):
+            rpkt = ftpResp(pkt)
     
-    elif pkt[TCP].dport in filteredPorts:
-      return
-    else:
-      rpkt = tcpRA(pkt)
+      elif pkt[TCP].dport in filteredPorts:
+        return
+      else:
+        rpkt = tcpRA(pkt)
  
   if (rpkt == None):
     return
