@@ -1,20 +1,19 @@
-scapyHunt is an objective-based game in which you will use common network attack vectors 
+scapyHunt is a terminal-based game in which you will use common network attack vectors 
 and penetration testing methods to analyze and compromise a virtual network.
 
-The network itself is completely defined by custom-made packets which simulate a typical network setup.
+The network itself is completely defined by handcrafted packets which simulate a typical network setup.
 
 All communications with the network must happen over the 'tap0' interface- 
-be sure to set the interface argument when using the tools listed below.
+be sure to set the interface argument when using the tools listed below. For some starting information, 
+try the command 'ifconfig tap0'.
 
 Have fun :)
-
-
 
 -----
 GOAL
 -----
 There is an FTP server somewhere on the network containing a very important document.
-Locate the server, and find a way to connect to the service and retrieve it.
+Locate the server, find a way to connect to the service and retrieve it.
 
 -----
 TOOLS
@@ -28,6 +27,7 @@ TOOLS
 -----
 CONCEPTS
 -----
+- Bash terminal-fu
 - Packet capture and manipulation in scapy
 - Packet analysis in wireshark
 - Router modes of operation
