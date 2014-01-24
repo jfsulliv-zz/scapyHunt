@@ -16,6 +16,6 @@ LEVEL 1 - Knock, knock
 6) Connect via telnet or nc to the given service. Try a standard command from here to get the clue.
  Ex) nc 10.5.0.6 [port]
 7) Use some standard service commands to query information from the service.
-8) Observe new traffic on the network and look for a pattern.
- 
+9) The target is configured to decline packets except from particular IP addresses. You will need to perform an ARP spoof on one of these hosts- observe network traffic to see who they accept.
+10) Connect to the FTP service and retrieve the payload.
  
