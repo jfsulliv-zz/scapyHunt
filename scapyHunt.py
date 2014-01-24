@@ -145,8 +145,8 @@ def gwTraffic():
 knockDaemon = threading.Thread(group=None, target=knockSequence, name=None, args=(), kwargs={}) 
 knockDaemon.daemon = True
 
-# Creates a daemon thread that will handle simulating traffic through the .35 gateway
-# (Same IP but varying MACs)
+  # Creates a daemon thread that will handle simulating traffic through the .35 gateway
+  # (Same IP but varying MACs)
 # Start conditions: User has performed CAM table overflow, forcing routing to hub
 # Termination conditions: N/A
 gwTrafficDaemon = threading.Thread(group=None, target=gwTraffic, name=None, args=(), kwargs={})
@@ -169,10 +169,15 @@ gwTrafficDaemon.daemon = True
 # Recieve and process incoming packets 
 def processPacket(pkt):
   if pkt.haslayer(ARP):
+    # Globally set ARP table if the router is in hub mode
     if pkt[ARP].pdst in clients:
+      if state.hubMode == True:
+        clients[pkt[ARP].pdst] = pkt[ARP].hwsrc
       o4 = getLastOctet(pkt[ARP].pdst)
       globals()['dot'+o4](pkt) # Call the dot[last_octet] function
     elif pkt[ARP].pdst in internalClients:
+      if state.hubMode == True:
+        clients[pkt[ARP].pdst] = pkt[ARP].hwsrc
       o4 = getLastOctet(pkt[ARP].pdst)
       globals()['internalDot'+o4](pkt) # Call the internalDot[last_octet] function
   elif (pkt.haslayer(TCP)): # SYN
@@ -186,6 +191,7 @@ def processPacket(pkt):
     state.macTable += 1 # Add an "entry" to the "MAC table"
     if state.macTable > 1023:
       knockDaemon.start()
+      state.hubMode = True
 
 # Generate a proper ARP who-has reply (is-at)
 def arpIsAt(pkt):
@@ -264,6 +270,23 @@ def smtpResp(pkt):
   tcp = TCP(flags='PA',seq=pkt[TCP].ack,ack=pkt[TCP].seq,sport = pkt[TCP].dport, dport = pkt[TCP].sport)
   rpkt = ether/ip/tcp/'250 Welcome - smtp02 - Secondary SMTP Server\r\n250 Primary server at 10.1.8.6\r\n'
   return rpkt
+
+# Generates a PSH-ACK response to a successful handshake, with an FTP standard payload
+def ftpInit(pkt):
+  ether = Ether(dst = pkt[Ether].src, src = pkt[Ether].dst)
+  ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
+  tcp = TCP(flags='PA',seq=pkt[TCP].ack,ack=pkt[TCP].seq,sport = pkt[TCP].dport, dport = pkt[TCP].sport)
+  rpkt = ether/ip/tcp/'220 QTCP ftp01.example.org\r\n'
+  return rpkt
+
+# Generates the payload packet that the player must find and hash
+def targetPkt(pkt):
+  ether = Ether(dst = pkt[Ether].src, src = pkt[Ether].dst)
+  ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
+  tcp = TCP(flags='F',seq=pkt[TCP].ack,ack=pkt[TCP].seq,sport = pkt[TCP].dport, dport = pkt[TCP].sport)
+  rpkt = ether/ip/tcp/'220 QTCP ftp01.example.org - Trusted FTP server\nCongratulations- you have gained access to the target FTP network.\r\n'
+  return rpkt
+
 
 # Destination Specific Packet Processing
 # -----
@@ -351,6 +374,49 @@ def dot35(pkt):
   os.write(tun,rpkt.build())
   
 def internalDot6(pkt):
+
+  # Immediately ignore any packets not from .4 or .6
+  if pkt.haslayer(IP) and pkt[IP].src not in ['10.5.0.6','10.5.0.4']:
+      return
+
+  rpkt = None
+  # ARP handling
+  if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
+    rpkt = arpIsAt(pkt)
+   
+  # TCP handling
+  elif (pkt.haslayer(TCP)):
+    if (state.knockSequence < 6):
+      if (pkt[TCP].dport in ports and pkt[TCP].flags == 0x002):
+        rpkt = knockAnswer(pkt)
+    
+    if (pkt[TCP].dport in openPorts[pkt[IP].dst]):
+      if (pkt[TCP].flags == 0x002): # SYN
+        rpkt = tcpSA(pkt)
+      
+      # Handling of FTP Traffic
+      if(pkt[TCP].dport == 25):
+        if (pkt[TCP].flags == 0x011): # FIN-ACK
+          rpkt = tcpA(pkt)
+          state.ftpIsAlive = False
+        elif (pkt[TCP].flags == 0x010): # ACK
+          if (state.ftpIsAlive == False): 
+            state.ftpIsAlive = True
+            rpkt = ftpInit(pkt)
+        #elif (pkt[TCP].flags == 0x018): # PSH-ACK
+        # Handling FTP session data
+    
+    elif pkt[TCP].dport in filteredPorts:
+      return
+    else:
+      rpkt = tcpRA(pkt)
+ 
+  if (rpkt == None):
+    return
+  
+  os.write(tun,rpkt.build())
+
+def internalDot22(pkt):
   rpkt = None
   # ARP handling
   if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
@@ -368,6 +434,26 @@ def internalDot6(pkt):
     return
   
   os.write(tun,rpkt.build())
+
+def internalDot2(pkt):
+  rpkt = None
+  # ARP handling
+  if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
+    rpkt = arpIsAt(pkt)
+    
+  # TCP handling
+  elif (pkt.haslayer(TCP)):
+    if pkt[TCP].dport in openPorts[pkt[IP].dst]:
+      if pkt[TCP].flags == 0x002: # SYN
+        rpkt = tcpSA(pkt)
+    else:
+      rpkt = tcpRA(pkt)
+  
+  if (rpkt == None):
+    return
+  
+  os.write(tun,rpkt.build())
+
 
 
 # TUN/TAP Interface Setup

@@ -1,9 +1,9 @@
 LEVEL 1 - Knock, knock
 
 1) Use nmap to determine the clients on the network.
- Ex) sudo nmap -e tap0 -sn 10.5.0/24
+ Ex) sudo nmap -e tap0 -sn 10.5.0.0/24
 2) Perform a CAM Table overflow attack on the network to force the router into 'Hub' mode. Traffic will now be broadcasted to all clients.
- Ex) sudo macof -I tap0 -d 10.5.0.1
+ Ex) sudo macof -I tap0
 3) Use wireshark to determine the port-knocking sequence from one host to the other. Be sure to capture the right interface.
 4) Copy this sequence using scapy. It may help to capture some packets into scapy and base yours off of these.
  Ex) in scapy:
@@ -11,9 +11,11 @@ LEVEL 1 - Knock, knock
     for p in a:
       # do something to the packets...
       sendp(p, iface='tap0')
-5) Use nmap to determine which service is now open to you for 10.5.0.6
+5) Use nmap to determine which service is now open to you on the recipient of the knock sequence
  Ex) sudo nmap 10.5.0.6 -e tap0
 6) Connect via telnet or nc to the given service. Try a standard command from here to get the clue.
  Ex) nc 10.5.0.6 [port]
+7) Use some standard service commands to query information from the service.
+8) Observe new traffic on the network and look for a pattern.
  
  
