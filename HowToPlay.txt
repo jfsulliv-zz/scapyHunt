@@ -1,7 +1,5 @@
-LEVEL 1 - Knock, knock
-
-There is an FTP server somewhere on the network which you need access to. 
-Locate the server and find a way to connect to the service.
+There is an FTP server somewhere on the network containing a very important document.
+Locate the server, and find a way to connect to the service and retreive it.
 
 -----
 TOOLS
@@ -19,7 +17,7 @@ CONCEPTS
 - Packet analysis in wireshark
 - Router modes of operation
 - Network topography, gateways
-- Basic telnet/nc commands for a particular, common service
+- Basic telnet/nc commands
 
 -----
 HINTS
