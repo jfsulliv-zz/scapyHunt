@@ -275,8 +275,13 @@ def smtpResp(pkt):
   ether = Ether(dst = pkt[Ether].src, src = pkt[Ether].dst)
   ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
   tcp = TCP(flags='PA',seq=pkt[TCP].ack,ack=pkt[TCP].seq + len(pkt[Raw].load),sport = pkt[TCP].dport, dport = pkt[TCP].sport)
-  
-  if "EHLO" in pkt[Raw].load or "HELO" in pkt[Raw].load:
+ 
+  SMTPargs = pkt[Raw].load.split(" ")
+  SMTPargs = [w.strip('\r\n') for w in SMTPargs]
+
+  if not 0 < len(SMTPargs) < 2:
+    load = '501-Invalid Command\r\n'
+  elif "EHLO" == SMTPargs[0] or "HELO" == SMTPargs[0]:
     load = '250-Welcome - smtp02 - Secondary SMTP Server\r\n250 Primary server at 10.1.8.6\r\n'
   else:
     load = '501-Invalid Command\r\n'
@@ -298,26 +303,40 @@ def ftpResp(pkt):
   ip = IP(src = pkt[IP].dst, dst = pkt[IP].src)
   tcp = TCP(flags='PA',seq=pkt[TCP].ack,ack=pkt[TCP].seq + len(pkt[Raw]),sport = pkt[TCP].dport, dport = pkt[TCP].sport)
 
+  FTPargs = pkt[Raw].load.split(" ")
+  FTPargs = [w.strip('\r\n') for w in FTPargs]
+
   # Detect command and reply appropriately
-  if "USER admin" in pkt[Raw].load and not state.ftpUserEntered:
+  if not 0 < len(FTPargs) < 3:
+    load = '501-Invalid Command\r\n'
+  elif "USER" == FTPargs[0] and len(FTPargs) == 2 and not state.ftpUserEntered:
     state.ftpUserEntered = True
+    state.ftpUser = FTPargs[1]
     load = "331-Enter Password.\r\n"
-  elif "PASS admin" in pkt[Raw].load and state.ftpUserEntered and not state.ftpPassEntered:
-    state.ftpPassEntered = True
-    load = "230-Admin logged on.\r\n"
-  elif "LIST" in pkt[Raw].load:
+  elif "PASS" == FTPargs[0] and state.ftpUserEntered and not state.ftpPassEntered:
+    if state.ftpUser == "admin" and len(FTPargs) == 2 and FTPargs[1] == "admin": 
+      state.ftpPassEntered = True
+      load = "230-Admin logged on.\r\n"
+    else:
+      state.ftpUser = None
+      state.ftpUserEntered = False
+      load = "430-Invalid Username or Password.\r\n"
+  elif "LIST" == FTPargs[0] and len(FTPargs) == 1:
     if state.ftpPassEntered == False:
       load = "530-User not logged in.\r\n"
     else:
       load = "250-topSecret.txt\r\n"
-  elif "RETR topSecret.txt" in pkt[Raw].load:
+  elif "RETR" == FTPargs[0] and len(FTPargs) == 2:
     if state.ftpPassEntered == False:
       load = "530-User not logged in.\r\n"
     else:
-      #First send a confirmation packet
-      confLoad = "150-Retreiving file topSecret.txt\r\n"
-      os.write(tun, (ether/ip/tcp/confLoad).build())
-      load = "FTP Data (W WARNING THIS IS WARNING\r\nV AP-VERSION 1.0\r\nW Congratulations on completing scapyHunt. Hash this payload with SHA1 to confirm that you've won.\r\n"
+      if FTPargs[1] == "topSecret.txt":
+        #First send a confirmation packet
+        confLoad = "150-Retreiving file topSecret.txt\r\n"
+        os.write(tun, (ether/ip/tcp/confLoad).build())
+        load = "FTP Data (W WARNING THIS IS WARNING\r\nV AP-VERSION 1.0\r\nW Congratulations on completing scapyHunt. Hash this payload with SHA1 to confirm that you've won.\r\n"
+      else: 
+        load = "550-File Not Found.\r\n"
   else:
     load = '501-Invalid Command\r\n'
 

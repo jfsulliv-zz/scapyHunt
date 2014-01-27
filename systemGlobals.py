@@ -18,4 +18,4 @@ ftpSeqNumber = 0
 ftpIsAlive = False
 ftpUserEntered = False
 ftpPassEntered = False
-
+ftpUser = None
