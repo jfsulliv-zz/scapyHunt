@@ -14,6 +14,10 @@
 #
 #        
 
+# Surpress scapy warnings
+import logging
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+
 from scapy.all import *
 from random import randint
 import systemGlobals as state
@@ -50,14 +54,12 @@ macTable = state.macTable
 def getLastOctet(IP):
   o1,o2,o3,o4 = IP.split('.')
   return o4
-
 # Returns a fake MAC Address based on a given IP
 def getMAC(IP):
   return "12:67:7e:b7:6d:" + ("%02x" % int(getLastOctet(IP)))
 # Returns a fake MAC Address based on a given IP in the internal network
 def getInternalMAC(IP):
   return "12:67:4f:a2:6d:" + ("%02x" % int(getLastOctet(IP)))
-
 # About-face for given packet on a particular layer
 def swapSrcAndDst(pkt,layer):
   pkt[layer].src, pkt[layer].dst = pkt[layer].dst, pkt[layer].src
@@ -121,6 +123,7 @@ def gwTraffic():
       ip = IP(src = source, dst = dest)
       ether = Ether(src = clients[source], dst = gwMAC)
       tcp = TCP(sport = randomPort, dport = randomPort + 1, flags = 0x002, window = 2048, seq = 0)
+    
     elif state.ftpIsAlive == False:
       # Send a TCP packet from 10.5.0.6:21 to 10.1.8.6:21 (FTP)
       source = '10.5.0.6'
@@ -154,25 +157,36 @@ gwTrafficDaemon.daemon = True
 
 # Packet Processing 
 # -----
-# processPacket - sends packets to the correct handling function based on destination and type
+# void processPacket(packet p) 
+#   Processes the input packet, using the below functions to generate a response and
+#   write to the TUN/TAP interface.
 # 
 # Packet Replies
 # -----
-# arpIsAt - generates an ARP Is-At response to an ARP Who-Has request
-# tcpSA   - generates a TCP SYN-ACK response to a TCP SYN request (indicative of open/unfiltered port)
-# tcpRA   - generates a TCP RES-ACK response to a TCP SYN request (indicative of closed port)
-# tcpA    - generates a TCP ACK response to a TCP SYN-ACK (Completed TCP handshake)
-# tcpFA   - generates a TCP FIN-ACK response to close a TCP connection
+# packet arpIsAt(packet p) 
+#   Generates an ARP Is-At response to an ARP Who-Has request
+# packet tcpSA(packet p)   
+#   Generates a TCP SYN-ACK response to a TCP SYN request (indicative of open/unfiltered port)
+# packet tcpRA(packet p)   
+#   Generates a TCP RES-ACK response to a TCP SYN request (indicative of closed port)
+# packet tcpA(packet p)    
+#   Generates a TCP ACK response to a TCP SYN-ACK (Completed TCP handshake)
+# packet tcpFA(packet p)   
+#   Generates a TCP FIN-ACK response to close a TCP connection
 # 
-# smtpInit - Initializes an SMTP session and sends a standard introduction payload
-# smtpResp - Responses for 'EHLO'/'HELO' information queries
+# smtpInit(packet p) 
+#   Initializes an SMTP session and sends a standard introduction payload
+# smtpResp(packet p) 
+#   Response for a 'EHLO'/'HELO' information query
 # 
-# ftpInit - Initializes a FTP session and sends a standard introduction payload
-# ftpResp - Responses for standard FTP queries (USER, PASS, LIST, RETR)
+# ftpInit(packet p) 
+#   Initializes a FTP session and sends a standard introduction payload
+# ftpResp(packet p 
+#   Response for standard FTP queries (USER, PASS, LIST, RETR)
 
 # Recieve and process incoming packets 
 def processPacket(pkt):
-  
+
   if pkt.haslayer(ARP):
     # Globally set ARP table if the router is in hub mode
     if pkt[ARP].pdst in clients:
@@ -181,8 +195,17 @@ def processPacket(pkt):
     elif pkt[ARP].pdst in internalClients:
       o4 = getLastOctet(pkt[ARP].pdst)
       globals()['internalDot'+o4](pkt) # Call the internalDot[last_octet] function
-  
-  elif (pkt.haslayer(TCP)): # SYN
+
+  elif (pkt.haslayer(ICMP) and
+      pkt[ICMP].type == 8): # ICMP echo-request
+    if pkt[IP].dst in clients:
+      o4 = getLastOctet(pkt[IP].dst)
+      globals()['dot'+o4](pkt) # Call the dot[last_octet] function
+    elif pkt[IP].dst in internalClients:
+      o4 = getLastOctet(pkt[IP].dst)
+      globals()['internalDot'+o4](pkt) # Call the internalDot[last_octet] function
+
+  elif (pkt.haslayer(TCP)):
     if pkt[IP].dst in clients:
       o4 = getLastOctet(pkt[IP].dst)
       globals()['dot'+o4](pkt)
@@ -190,7 +213,9 @@ def processPacket(pkt):
       o4 = getLastOctet(pkt[IP].dst)
       globals()['internalDot'+o4](pkt) # Call the internalDot[last_octet] function
   
-  elif (pkt.haslayer(Ether) and state.macTable < 1024):
+  elif (pkt.haslayer(Ether) and 
+      not pkt.haslayer(ICMP) and 
+      state.macTable < 1024):
     state.macTable += 1 # Add an "entry" to the "MAC table"
     if state.macTable > 1023:
       knockDaemon.start()
@@ -205,6 +230,16 @@ def arpIsAt(pkt):
   ether = Ether(dst=pkt.hwsrc, src=fake_src_mac)
   arp = ARP(op="is-at", psrc=pkt.pdst, pdst="10.5.0.1", hwsrc=fake_src_mac, hwdst=pkt.hwsrc)
   rpkt = ether/arp
+  return rpkt
+
+# Generates an ICMP echo reply
+def icmpEchoReply(pkt):
+  rpkt = pkt.copy()
+  swapSrcAndDst(rpkt, Ether)
+  swapSrcAndDst(rpkt, IP)
+  rpkt[ICMP].type = 'echo-reply'
+  rpkt[ICMP].chksum = None # Recalculate checksum
+  rpkt[IP].chksum = None
   return rpkt
 
 # Generate a Syn-Ack response to a Syn request
@@ -281,7 +316,10 @@ def smtpResp(pkt):
 
   if not 0 < len(SMTPargs) < 2:
     load = '501-Invalid Command\r\n'
-  elif "EHLO" == SMTPargs[0] or "HELO" == SMTPargs[0]:
+  
+
+  elif ("EHLO" == SMTPargs[0] 
+      or "HELO" == SMTPargs[0]):
     load = '250-Welcome - smtp02 - Secondary SMTP Server\r\n250 Primary server at 10.1.8.6\r\n'
   else:
     load = '501-Invalid Command\r\n'
@@ -309,24 +347,49 @@ def ftpResp(pkt):
   # Detect command and reply appropriately
   if not 0 < len(FTPargs) < 3:
     load = '501-Invalid Command\r\n'
-  elif "USER" == FTPargs[0] and len(FTPargs) == 2 and not state.ftpUserEntered:
+  
+  # If USER is sent as the first argument, parse the second as the username.
+  elif ("USER" == FTPargs[0] and 
+      len(FTPargs) == 2 and 
+      not state.ftpUserEntered):
+
     state.ftpUserEntered = True
     state.ftpUser = FTPargs[1]
     load = "331-Enter Password.\r\n"
-  elif "PASS" == FTPargs[0] and state.ftpUserEntered and not state.ftpPassEntered:
-    if state.ftpUser == "admin" and len(FTPargs) == 2 and FTPargs[1] == "admin": 
+  
+  # If PASS is sent as the first argument, parse the second as the password.
+  #  Do nothing if USER is not yet parsed.
+  #  Authenticate iff both USER, PASS are set correctly as (admin, admin)
+  elif ("PASS" == FTPargs[0] and 
+      state.ftpUserEntered and 
+      not state.ftpPassEntered):
+
+    if (state.ftpUser == "admin" and 
+        len(FTPargs) == 2 and 
+        FTPargs[1] == "admin"): 
       state.ftpPassEntered = True
       load = "230-Admin logged on.\r\n"
     else:
       state.ftpUser = None
       state.ftpUserEntered = False
       load = "430-Invalid Username or Password.\r\n"
-  elif "LIST" == FTPargs[0] and len(FTPargs) == 1:
+  
+  # If LIST is sent as the only argument, then return a payload listing the target file.
+  #  Do nothing if not authenticated.
+  elif ("LIST" == FTPargs[0] and 
+      len(FTPargs) == 1):
+
     if state.ftpPassEntered == False:
       load = "530-User not logged in.\r\n"
     else:
       load = "250-topSecret.txt\r\n"
-  elif "RETR" == FTPargs[0] and len(FTPargs) == 2:
+  
+  # If RETR is sent as the first argument, then parse the second as the source filename.
+  #  Do nothing if the user is not authenticated.
+  #  Do nothing if the filename is invalid.
+  elif ("RETR" == FTPargs[0] and 
+      len(FTPargs) == 2):
+
     if state.ftpPassEntered == False:
       load = "530-User not logged in.\r\n"
     else:
@@ -334,9 +397,13 @@ def ftpResp(pkt):
         #First send a confirmation packet
         confLoad = "150-Retreiving file topSecret.txt\r\n"
         os.write(tun, (ether/ip/tcp/confLoad).build())
-        load = "FTP Data (W WARNING THIS IS WARNING\r\nV AP-VERSION 1.0\r\nW Congratulations on completing scapyHunt. Hash this payload with SHA1 to confirm that you've won.\r\n"
+        load = """FTP Data (W WARNING THIS IS WARNING\r\n
+          V AP-VERSION 1.0\r\n
+          W Congratulations on completing scapyHunt. 
+          Hash this payload with SHA1 to confirm that you've won.\r\n"""
       else: 
         load = "550-File Not Found.\r\n"
+  
   else:
     load = '501-Invalid Command\r\n'
 
@@ -350,11 +417,21 @@ def ftpResp(pkt):
 #  dot4  - Standard client
 #  dot6  - Secondary SMTP server (port-knocking target)
 #  dot35 - Gateway to internal network with redirection based on destination MAC
+#  internalDot2 - Standard internal client
+#  internalDot6 - Internal FTP server and target
+#  internalDot22 - Standard internal client
 
 def dot4(pkt):
   rpkt = None
+
+  # ICMP echo handling
+  if (pkt.haslayer(ICMP) and
+      pkt[ICMP].type == 8):
+    rpkt = icmpEchoReply(pkt)
+
   # ARP handling
-  if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
+  if (pkt.haslayer(ARP) and 
+      pkt[ARP].op == 1):
     rpkt = arpIsAt(pkt)
     
   # TCP handling
@@ -373,14 +450,22 @@ def dot6(pkt):
   rpkt = None
   ports = [951,951,4826,443,100,21]
   filteredPorts = [25]
+
+  # ICMP echo handling
+  if (pkt.haslayer(ICMP) and
+      pkt[ICMP].type == 8):
+    rpkt = icmpEchoReply(pkt)
+
   # ARP handling
-  if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
+  if (pkt.haslayer(ARP) and 
+      pkt[ARP].op == 1):
     rpkt = arpIsAt(pkt)
     
   # TCP handling
   elif (pkt.haslayer(TCP)):
     if (state.knockSequence < 6):
-      if (pkt[TCP].dport in ports and pkt[TCP].flags == 0x002):
+      if (pkt[TCP].dport in ports and 
+          pkt[TCP].flags == 0x002):
         rpkt = knockAnswer(pkt)
     
     if (pkt[TCP].dport in openPorts[pkt[IP].dst]):
@@ -412,8 +497,14 @@ def dot6(pkt):
 def dot35(pkt):
   rpkt = None
 
+  # ICMP echo handling
+  if (pkt.haslayer(ICMP) and
+      pkt[ICMP].type == 8):
+    rpkt = icmpEchoReply(pkt)
+
   # ARP handling
-  if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
+  if (pkt.haslayer(ARP) and 
+      pkt[ARP].op == 1):
     rpkt = arpIsAt(pkt)
 
   # TCP handling
@@ -428,8 +519,36 @@ def dot35(pkt):
     return
   os.write(tun,rpkt.build())
   
+def internalDot2(pkt):
+  rpkt = None
+
+  # ICMP echo handling
+  if (pkt.haslayer(ICMP) and
+      pkt[ICMP].type == 8):
+    rpkt = icmpEchoReply(pkt)
+
+  # ARP handling
+  if (pkt.haslayer(ARP) and 
+      pkt[ARP].op == 1):
+    rpkt = arpIsAt(pkt)
+    
+  # TCP handling
+  elif (pkt.haslayer(TCP)):
+    if pkt[TCP].dport in openPorts[pkt[IP].dst]:
+      if pkt[TCP].flags == 0x002: # SYN
+        rpkt = tcpSA(pkt)
+    else:
+      rpkt = tcpRA(pkt)
+  
+  if (rpkt == None):
+    return
+  
+  os.write(tun,rpkt.build())
+
 def internalDot6(pkt):
  
+  # NO echo handling- configured to ignore ICMP echo
+
   rpkt = None
   # ARP handling
   if (pkt.haslayer(ARP)):
@@ -474,9 +593,16 @@ def internalDot6(pkt):
   os.write(tun,rpkt.build())
 
 def internalDot22(pkt):
+
+  # ICMP echo handling
+  if (pkt.haslayer(ICMP) and
+      pkt[ICMP].type == 8):
+    rpkt = icmpEchoReply(pkt)
+
   rpkt = None
   # ARP handling
-  if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
+  if (pkt.haslayer(ARP) and 
+      pkt[ARP].op == 1):
     rpkt = arpIsAt(pkt)
     
   # TCP handling
@@ -491,26 +617,6 @@ def internalDot22(pkt):
     return
   
   os.write(tun,rpkt.build())
-
-def internalDot2(pkt):
-  rpkt = None
-  # ARP handling
-  if (pkt.haslayer(ARP) and pkt[ARP].op == 1):
-    rpkt = arpIsAt(pkt)
-    
-  # TCP handling
-  elif (pkt.haslayer(TCP)):
-    if pkt[TCP].dport in openPorts[pkt[IP].dst]:
-      if pkt[TCP].flags == 0x002: # SYN
-        rpkt = tcpSA(pkt)
-    else:
-      rpkt = tcpRA(pkt)
-  
-  if (rpkt == None):
-    return
-  
-  os.write(tun,rpkt.build())
-
 
 
 # TUN/TAP Interface Setup
@@ -547,8 +653,6 @@ ifname = ifs[:16].strip("\x00")  # will be tap0
 
 # Optionally, we want tap0 be accessed by the normal user.
 fcntl.ioctl(tun, TUNSETOWNER, 1000)
-
-print "Allocated interface %s. Configuring it." % ifname
 
 subprocess.check_call("ifconfig %s down" % ifname, shell=True)
 subprocess.check_call("ifconfig %s hw ether 12:67:7e:b7:6d:c8" % ifname, shell=True)
