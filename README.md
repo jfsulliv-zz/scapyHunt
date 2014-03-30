@@ -1,7 +1,7 @@
 **scapyHunt** - A series of Network Security puzzles and challenges designed to educate users on packet manipulation
 and common network attacks. 
 
-Creates a TUN/TAP interface for the virtual network 10.5.0/24, over which packets will be sent by the
+Creates a TUN/TAP interface for a software defined network, over which packets will be sent by the
 user- either hand crafted or using a variety of tools- in order to achieve a given objective.
 
 Uses scapy, a Python packet manipulation library.
