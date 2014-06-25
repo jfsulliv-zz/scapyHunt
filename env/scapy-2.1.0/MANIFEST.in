@@ -1,4 +1,0 @@
-include MANIFEST.in
-include run_scapy
-recursive-include doc *
-recursive-include test *
