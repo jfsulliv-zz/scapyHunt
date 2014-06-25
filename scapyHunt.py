@@ -28,6 +28,9 @@ import sys
 import socket
 import fcntl
 
+import signal
+import sys
+
 # Global variables/states
 # -----
 # clients - a dictionary mapping IP addresses to MAC addresses
@@ -189,6 +192,9 @@ def processPacket(pkt):
 
   if pkt.haslayer(ARP):
     # Globally set ARP table if the router is in hub mode
+    if pkt[ARP].op == 2 and pkt[ARP].psrc in clients: 
+      clients[pkt[ARP].psrc] = pkt[ARP].hwsrc
+    
     if pkt[ARP].pdst in clients:
       o4 = getLastOctet(pkt[ARP].pdst)
       globals()['dot'+o4](pkt) # Call the dot[last_octet] function
@@ -554,8 +560,6 @@ def internalDot6(pkt):
   if (pkt.haslayer(ARP)):
     if pkt[ARP].op == 1:
       rpkt = arpIsAt(pkt)
-    elif pkt[ARP].op == 2 and pkt[ARP].psrc in clients: 
-      clients[pkt[ARP].psrc] = pkt[ARP].hwsrc
  
   # Immediately ignore any packets not from the supposed .4 and .6 clients
   elif pkt.haslayer(Ether) and pkt[Ether].src not in [clients['10.5.0.6'],clients['10.5.0.4']]:
@@ -582,8 +586,6 @@ def internalDot6(pkt):
           if pkt.haslayer(Raw):
             rpkt = ftpResp(pkt)
     
-      elif pkt[TCP].dport in filteredPorts:
-        return
       else:
         rpkt = tcpRA(pkt)
  
@@ -679,6 +681,14 @@ openPorts['10.5.0.35'] = [20,21,22,25,80,443,8080]
 openPorts['10.1.8.6'] = [21, 25]
 openPorts['10.1.8.2'] = [20, 80, 443]
 openPorts['10.1.8.22'] = [20, 22, 80, 443]
+
+print("The game is now running- tap0 interface allocated.\nEnding the process will deallocate this interface and release all state.")
+
+def signal_handler(signal,frame):
+  print("Exiting game and deallocating the tap0 interface.")
+  sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
 
 #  Main loop, reads and processes packets
 while 1:
