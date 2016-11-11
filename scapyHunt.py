@@ -232,7 +232,7 @@ def arpIsAt(pkt):
   if pkt[ARP].pdst in clients:
     fake_src_mac = clients[pkt[ARP].pdst]
   elif pkt[ARP].pdst in internalClients:
-    fake_src_mac = clients[pkt[ARP].pdst]
+    fake_src_mac = internalClients[pkt[ARP].pdst]
   ether = Ether(dst=pkt.hwsrc, src=fake_src_mac)
   arp = ARP(op="is-at", psrc=pkt.pdst, pdst="10.5.0.1", hwsrc=fake_src_mac, hwdst=pkt.hwsrc)
   rpkt = ether/arp
